@@ -1,0 +1,16 @@
+name = "P1Soundness"
+version = "0.1.0"
+keywords = ["math"]
+defaultTargets = ["P1Soundness"]
+
+[leanOptions]
+pp.unicode.fun = true
+relaxedAutoImplicit = false
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.29.1"
+
+[[lean_lib]]
+name = "P1Soundness"
