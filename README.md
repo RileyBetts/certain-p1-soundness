@@ -28,37 +28,49 @@ The same command works with `Admission.lean`, `SearchCost.lean`, or `Sanctions.l
 | File | Role |
 | --- | --- |
 | `P1Soundness.lean` | Root imports. |
-| `P1Soundness/SoundComposition.lean` | Finite-state model, refinement contract, P1. |
+| `P1Soundness/SoundComposition.lean` | Task, policy, plan, certificate, refinement contract, P1. |
 | `P1Soundness/Admission.lean` | P2 and the ungated contrast. |
 | `P1Soundness/SearchCost.lean` | P3 bound, one saving, one increase. |
 | `P1Soundness/Sanctions.lean` | Dropped sanctions bit. |
 
 ## What is assumed
 
-`PlanningModel` is a finite state space (`Fintype`) with an initial-state predicate, a step relation, a safety predicate, and a goal predicate. Reachability is the reflexive-transitive closure of `step`. Traces are finite.
+A task type is one kind of regulated decision: supplier onboarding, payments, or data access.
+
+A policy is the pair `(T, I)` for one task type. `T` says which action may be taken from which state. `I` is the safety invariant. Every task of that type is checked against that policy.
+
+A task is one case of one task type. It fixes the starting state and the goal `G`. `G` says when the task is finished. It is not the policy.
+
+A plan is a list of actions. A step is one action. A plan succeeds only when every run is safe and meets the goal. `run_safe_of_obligations` shows that a task which meets its obligations has only safe runs.
+
+A certificate is what the checker accepts or refuses. A library entry exists only with an accepted certificate. The gate decides whether a plan may be carried out with a certificate. The library is not an argument of the gate.
+
+State spaces are finite (`Fintype`). A scored plan is no longer than a fixed bound (`inFiniteFragment`). Traces are finite.
 
 `Obligations` has two parts.
 
-- **Safety.** Every state reachable from an initial state is safe.
-- **Goal.** Every reachable state with no successor satisfies the goal. This is not “the goal holds at the last state of a nominated action list”.
+- **Safety.** Every state reachable from the task's start satisfies `I`.
+- **Goal.** Every reachable state with no legal action satisfies `G`. This is the goal of the task's transition system, not “`G` holds at the last state of one nominated plan”.
 
-`RefinementContract C A R` is a stutter-free forward simulation of concrete model `C` by abstract model `A` along relation `R`. One concrete step is matched by exactly one abstract step. The fields `assumptions`, `simulation`, and `terminal` are the discharged assumptions. `safetyTransfer` and `goalTransfer` say that safety and goal on an abstract state pass to each related concrete state. Nothing here proves that a given checker implements this contract. The caller must supply a value of type `RefinementContract`.
+`RefinementContract C A R` is a lockstep forward simulation of concrete task `C` by abstract task `A` along relation `R`. One concrete action is matched by exactly one abstract action. Stuttering is not proved. The fields `assumptions`, `simulation`, and `terminal` are the discharged assumptions. `safetyTransfer` and `goalTransfer` pass the abstract invariant and goal down to the related concrete state. Nothing here proves that a given checker implements this contract.
 
 ## Theorems and what they show
 
 ### P1 — `p1_sound_composition`
 
-If two contracts `M₁ → M₂` and `M₂ → M₃` are given, and `M₃` meets its obligations, then `M₁` meets its obligations. The simulation used on the whole span is relational composition of the two relations. `refinementContract_trans` is the proof that those two contracts compose.
+If two contracts `M₁ → M₂` and `M₂ → M₃` are given, and `M₃` meets its obligations, then the concrete task `M₁` meets its obligations. The simulation on the whole span is relational composition. `refinementContract_trans` proves that the two contracts compose.
 
-This is two links, not an arbitrary stack. A longer chain is not packaged as one theorem. Stuttering, infinite traces, and beliefs are out of scope.
+This is two links, not an arbitrary stack. Stuttering, infinite traces, and beliefs are out of scope.
 
 The CERTAIN text names this artefact `p1_sound_composition`.
 
 ### P2 — `p2_library_extension_safety`
 
-`Admitted gate library M` is defined as `gate M`. The library argument is ignored. Extending the library therefore does not change admission, whether or not the added entry was certified. The proof is `Iff.rfl`.
+`Admitted gate library plan C` is defined as `gate plan C`. The library is a list of abstractions admitted by a certificate, and that argument is ignored. Extending the library does not change admission. The proof is `Iff.rfl`.
 
-`p2_rejected_stays_rejected` is the same fact stated for a plan the gate already rejects.
+`Gate planOk plan C` is the intended shape: the certificate is accepted, and the plan meets `planOk`. A belief is not an argument.
+
+`p2_rejected_stays_rejected` is the same fact for a plan the gate already rejects.
 
 `ungated_library_enlarges` is the contrast. If permission is membership of the library, then `release` is refused by the empty library and admitted once it is added.
 
@@ -66,7 +78,7 @@ The CERTAIN text names `p2_library_extension_safety` and `ungated_library_enlarg
 
 ### P3 — search cost
 
-Cost is the number of nodes in a complete regular tree, `branching ^ depth`. Using one abstraction costs the abstract tree plus one refinement-check cost. Using none costs the concrete tree. There is no probability and no expectation.
+This file measures search nodes only. Cost is the number of nodes in a complete regular tree, `branching ^ depth`. Using one abstraction costs the abstract tree plus one refinement-check cost. Using none costs the concrete tree. There is no probability and no expectation. This is not the four-term cost that also counts checker calls, time and GPU use.
 
 | Theorem | Statement |
 | --- | --- |
@@ -78,13 +90,17 @@ The CERTAIN text names `p3_positive_bound` and `p3_counterexample`. The exhibite
 
 ### Sanctions counterexample
 
-Both workflows use the same two steps: `start → auth false → rel false`. The training model treats every state as safe. The holdout model treats `rel false` as unsafe.
+There is one payment policy. `T` allows both a cleared and an uncleared release. `I` says a release is safe only when sanctions are clear. The training task and the holdout task share that policy and the payment task type. Training starts where clearance is already known, so every reachable state satisfies `I`. Holdout starts at the beginning, so an uncleared release is reachable.
+
+The abstract task erases the clearance bit and treats every state as safe.
 
 | Theorem | Statement |
 | --- | --- |
-| `training_obligations` | The training model meets `Obligations`. |
-| `holdout_unsafe` | The holdout model does not. `rel false` is reachable. |
+| `shared_payment_policy` | Training and holdout use the same policy. |
+| `shared_task_type` | Both are payment tasks. |
+| `training_obligations` | The training task meets `Obligations`. |
+| `holdout_unsafe` | The holdout task does not. `rel false` is reachable. |
 | `erase_forgets_clearance` | `erase (rel false) = erase (rel true)`. |
-| `sanctions_no_refinement` | For every relation `R`, there is no `RefinementContract` from the holdout model to the abstract model. The abstract model meets its obligations, so a contract would make the holdout model safe. |
+| `sanctions_no_refinement` | For every relation `R`, there is no `RefinementContract` from the holdout task to the abstract task. The abstract task meets its obligations, so a contract would make the holdout task safe. |
 
-The CERTAIN text names these four. The proofs do not show that putting clearance into an assumption field restores a contract. They show that this erasure does not refine.
+The CERTAIN text names the last four. The proofs do not show that putting clearance into an assumption field restores a contract. They show that this erasure does not refine.

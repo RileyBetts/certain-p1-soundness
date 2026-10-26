@@ -1,16 +1,21 @@
 import P1Soundness.SoundComposition
 
+open Certain Certain.Task
+
 /-!
 # Dropped sanctions bit
 
-A payment plan that only records authorisation and release is safe in a
-training workflow that does not require sanctions clearance, and unsafe in a
-holdout workflow that does. Both workflows share the same transitions. The
-abstract machine erases the clearance bit, so the two concrete states
-`released false` and `released true` look identical.
+One payment policy `(T, I)`. `T` allows a cleared release and an uncleared release.
+`I` says a release is safe only when sanctions are clear.
 
-If the abstract machine meets its obligations, no refinement contract from the
-holdout machine can exist: `obligations_transfer` would make the holdout safe.
+The training task and the holdout task are two cases of that task type.
+They share the policy. The training task starts where sanctions are already clear,
+so every reachable state satisfies `I`. The holdout task starts at the beginning,
+so an uncleared release is reachable and `I` fails.
+
+The abstract task erases the clearance bit. Its own invariant holds, and no
+refinement contract from the holdout task to that abstract task exists:
+`obligations_transfer` would make the holdout task safe.
 -/
 
 inductive Pay
@@ -19,10 +24,20 @@ inductive Pay
   | rel (cleared : Bool)
   deriving DecidableEq
 
+inductive PayAct
+  | toAuth (cleared : Bool)
+  | toRel
+  deriving DecidableEq
+
 inductive AbsPay
   | start
   | auth
   | rel
+  deriving DecidableEq
+
+inductive AbsAct
+  | toAuth
+  | toRel
   deriving DecidableEq
 
 instance : Fintype Pay where
@@ -40,208 +55,188 @@ instance : Fintype AbsPay where
 
 namespace Sanctions
 
-def trainStepB : Pay → Pay → Bool
-  | .start, .auth false => true
-  | .auth false, .rel false => true
-  | _, _ => false
+def payTB : Pay → PayAct → Pay → Bool
+  | .start, .toAuth c, .auth c' => c == c'
+  | .auth c, .toRel, .rel c' => c == c'
+  | _, _, _ => false
 
-def trainStep (s s' : Pay) : Prop :=
-  trainStepB s s' = true
+def payT (s : Pay) (a : PayAct) (s' : Pay) : Prop :=
+  payTB s a s' = true
 
-lemma train_start_auth : trainStep .start (.auth false) := by
-  unfold trainStep trainStepB
-  rfl
+lemma pay_start_auth (c : Bool) : payT .start (.toAuth c) (.auth c) := by
+  cases c <;> rfl
 
-lemma train_auth_rel : trainStep (.auth false) (.rel false) := by
-  unfold trainStep trainStepB
-  rfl
+lemma pay_auth_rel (c : Bool) : payT (.auth c) .toRel (.rel c) := by
+  cases c <;> rfl
 
-def goal : Pay → Prop
-  | .rel _ => True
-  | _ => False
-
-/-- Clearance is irrelevant in the training workflow. -/
-def training : PlanningModel Pay where
-  init s := s = .start
-  step := trainStep
-  safe _ := True
-  goal := goal
-
-/-- Release without clearance violates the holdout invariant. -/
-def holdSafe : Pay → Prop
+/-- Release is safe only when sanctions are clear. -/
+def payI : Pay → Prop
   | .rel cleared => cleared = true
   | _ => True
 
-def holdout : PlanningModel Pay where
-  init s := s = .start
-  step := trainStep
-  safe := holdSafe
-  goal := goal
+def paymentPolicy : Policy Pay PayAct where
+  T := payT
+  I := payI
+
+def released : Pay → Prop
+  | .rel _ => True
+  | _ => False
+
+/-- Same policy as the holdout. Starts where clearance is already known. -/
+def training : Task Pay PayAct where
+  taskType := .payments
+  policy := paymentPolicy
+  start := .auth true
+  goal := released
+
+/-- Same policy as training. Starts at the beginning, so uncleared release is reachable. -/
+def holdout : Task Pay PayAct where
+  taskType := .payments
+  policy := paymentPolicy
+  start := .start
+  goal := released
+
+theorem shared_payment_policy : training.policy = holdout.policy := rfl
+
+theorem shared_task_type :
+    training.taskType = TaskType.payments ∧ holdout.taskType = TaskType.payments :=
+  ⟨rfl, rfl⟩
 
 def erase : Pay → AbsPay
   | .start => .start
   | .auth _ => .auth
   | .rel _ => .rel
 
-def absStepB : AbsPay → AbsPay → Bool
-  | .start, .auth => true
-  | .auth, .rel => true
-  | _, _ => false
+def absTB : AbsPay → AbsAct → AbsPay → Bool
+  | .start, .toAuth, .auth => true
+  | .auth, .toRel, .rel => true
+  | _, _, _ => false
 
-def absStep (s s' : AbsPay) : Prop :=
-  absStepB s s' = true
+def absT (s : AbsPay) (a : AbsAct) (s' : AbsPay) : Prop :=
+  absTB s a s' = true
 
-lemma abs_start_auth : absStep .start .auth := by
-  unfold absStep absStepB
-  rfl
+lemma abs_start_auth : absT .start .toAuth .auth := rfl
 
-lemma abs_auth_rel : absStep .auth .rel := by
-  unfold absStep absStepB
-  rfl
+lemma abs_auth_rel : absT .auth .toRel .rel := rfl
 
-def abstract : PlanningModel AbsPay where
-  init s := s = .start
-  step := absStep
-  safe _ := True
-  goal s := s = .rel
+/-- The coarse task drops the clearance bit and treats every state as safe. -/
+def abstract : Task AbsPay AbsAct where
+  taskType := .payments
+  policy := { T := absT, I := fun _ => True }
+  start := .start
+  goal := fun s => s = .rel
 
 theorem erase_forgets_clearance :
     erase (.rel false) = erase (.rel true) :=
   rfl
 
-lemma step_of {s s' : Pay} (h : trainStep s s') :
-    (s = .start ∧ s' = .auth false) ∨ (s = .auth false ∧ s' = .rel false) := by
-  cases s with
-  | start =>
-      cases s' with
-      | auth cleared =>
-          cases cleared
-          · exact Or.inl ⟨rfl, rfl⟩
-          · simp [trainStep, trainStepB] at h
-      | start => simp [trainStep, trainStepB] at h
-      | rel _ => simp [trainStep, trainStepB] at h
-  | auth cleared =>
-      cases cleared with
-      | false =>
-          cases s' with
-          | rel c =>
-              cases c
-              · exact Or.inr ⟨rfl, rfl⟩
-              · simp [trainStep, trainStepB] at h
-          | start => simp [trainStep, trainStepB] at h
-          | auth _ => simp [trainStep, trainStepB] at h
-      | true => simp [trainStep, trainStepB] at h
-  | rel _ => simp [trainStep, trainStepB] at h
+lemma payT_auth {c : Bool} {a : PayAct} {s : Pay} (h : payT (.auth c) a s) :
+    a = .toRel ∧ s = .rel c := by
+  cases a <;> cases s <;> simp [payT, payTB] at h
+  subst h
+  exact ⟨rfl, rfl⟩
 
-lemma absStep_of {s s' : AbsPay} (h : absStep s s') :
-    (s = .start ∧ s' = .auth) ∨ (s = .auth ∧ s' = .rel) := by
-  cases s with
-  | start =>
-      cases s' with
-      | auth => exact Or.inl ⟨rfl, rfl⟩
-      | start => simp [absStep, absStepB] at h
-      | rel => simp [absStep, absStepB] at h
-  | auth =>
-      cases s' with
-      | rel => exact Or.inr ⟨rfl, rfl⟩
-      | start => simp [absStep, absStepB] at h
-      | auth => simp [absStep, absStepB] at h
-  | rel => simp [absStep, absStepB] at h
+lemma payT_rel {c : Bool} {a : PayAct} {s : Pay} (h : payT (.rel c) a s) : False := by
+  cases c <;> cases a <;> cases s <;> unfold payT payTB at h <;> simp at h
 
 lemma training_reach (s : Pay) :
-    training.Reach .start s ↔
-      s = .start ∨ s = .auth false ∨ s = .rel false := by
+    ReachFrom training.policy training.start s ↔
+      s = .auth true ∨ s = .rel true := by
   constructor
   · intro h
     induction h with
-    | refl => simp
+    | refl => simp [training]
     | tail _ hstep ih =>
-        have hstep := step_of hstep
-        rcases ih with rfl | rfl | rfl
-        · rcases hstep with ⟨_, rfl⟩ | ⟨h, _⟩
-          · simp
-          · cases h
-        · rcases hstep with ⟨h, _⟩ | ⟨_, rfl⟩
-          · cases h
-          · simp
-        · rcases hstep with ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
+        rcases ih with rfl | rfl
+        · obtain ⟨a, ha⟩ := hstep
+          obtain ⟨rfl, rfl⟩ := payT_auth ha
+          simp
+        · obtain ⟨a, ha⟩ := hstep
+          exact (payT_rel ha).elim
   · intro h
-    rcases h with rfl | rfl | rfl
+    rcases h with rfl | rfl
     · exact Relation.ReflTransGen.refl
-    · exact Relation.ReflTransGen.tail .refl train_start_auth
-    · exact Relation.ReflTransGen.tail
-        (Relation.ReflTransGen.tail .refl train_start_auth) train_auth_rel
+    · exact Relation.ReflTransGen.tail Relation.ReflTransGen.refl
+        ⟨.toRel, pay_auth_rel true⟩
+
+lemma absT_start {a : AbsAct} {s : AbsPay} (h : absT .start a s) :
+    a = .toAuth ∧ s = .auth := by
+  cases a <;> cases s <;> simp [absT, absTB] at h
+  exact ⟨rfl, rfl⟩
+
+lemma absT_auth {a : AbsAct} {s : AbsPay} (h : absT .auth a s) :
+    a = .toRel ∧ s = .rel := by
+  cases a <;> cases s <;> simp [absT, absTB] at h
+  exact ⟨rfl, rfl⟩
+
+lemma absT_rel {a : AbsAct} {s : AbsPay} (h : absT .rel a s) : False := by
+  cases a <;> cases s <;> simp [absT, absTB] at h
 
 lemma abstract_reach (s : AbsPay) :
-    abstract.Reach .start s ↔ s = .start ∨ s = .auth ∨ s = .rel := by
+    ReachFrom abstract.policy abstract.start s ↔
+      s = .start ∨ s = .auth ∨ s = .rel := by
   constructor
   · intro h
     induction h with
-    | refl => simp
+    | refl => simp [abstract]
     | tail _ hstep ih =>
-        have hstep := absStep_of hstep
         rcases ih with rfl | rfl | rfl
-        · rcases hstep with ⟨_, rfl⟩ | ⟨h, _⟩
-          · simp
-          · cases h
-        · rcases hstep with ⟨h, _⟩ | ⟨_, rfl⟩
-          · cases h
-          · simp
-        · rcases hstep with ⟨h, _⟩ | ⟨h, _⟩ <;> cases h
+        · obtain ⟨a, ha⟩ := hstep
+          obtain ⟨rfl, rfl⟩ := absT_start ha
+          simp
+        · obtain ⟨a, ha⟩ := hstep
+          obtain ⟨rfl, rfl⟩ := absT_auth ha
+          simp
+        · obtain ⟨a, ha⟩ := hstep
+          exact (absT_rel ha).elim
   · intro h
     rcases h with rfl | rfl | rfl
     · exact Relation.ReflTransGen.refl
-    · exact Relation.ReflTransGen.tail .refl abs_start_auth
+    · exact Relation.ReflTransGen.tail Relation.ReflTransGen.refl ⟨.toAuth, abs_start_auth⟩
     · exact Relation.ReflTransGen.tail
-        (Relation.ReflTransGen.tail .refl abs_start_auth) abs_auth_rel
+        (Relation.ReflTransGen.tail Relation.ReflTransGen.refl ⟨.toAuth, abs_start_auth⟩)
+        ⟨.toRel, abs_auth_rel⟩
 
-theorem training_obligations : training.Obligations where
+theorem training_obligations : Obligations training where
   safety := by
-    intro _ _ _ _
-    simp [training]
-  goalAtTerminal := by
-    intro s₀ s hs₀ hreach hterm
-    have hs₀' : s₀ = .start := hs₀
-    subst hs₀'
+    intro s hreach
     have hs := (training_reach s).1 hreach
-    have hclosed : ¬ (s = .start ∨ s = .auth false) := by
-      intro hopen
-      rcases hopen with rfl | rfl
-      · exact hterm (.auth false) train_start_auth
-      · exact hterm (.rel false) train_auth_rel
-    rcases hs with rfl | rfl | rfl
-    · exact absurd (Or.inl rfl) hclosed
-    · exact absurd (Or.inr rfl) hclosed
-    · simp [training, goal]
+    rcases hs with rfl | rfl <;> simp [training, paymentPolicy, payI]
+  goalAtTerminal := by
+    intro s hreach hterm
+    have hs := (training_reach s).1 hreach
+    rcases hs with rfl | rfl
+    · exact False.elim (hterm (.rel true) ⟨.toRel, pay_auth_rel true⟩)
+    · simp [training, released]
 
-theorem holdout_unsafe : ¬ holdout.Obligations := by
+theorem holdout_unsafe : ¬ Obligations holdout := by
   intro h
-  have hreach : holdout.Reach .start (.rel false) :=
-    (training_reach (.rel false)).2 (Or.inr (Or.inr rfl))
-  have hsafe := h.safety .start (.rel false) rfl hreach
-  simp [holdout, holdSafe] at hsafe
+  have hreach : ReachFrom holdout.policy holdout.start (.rel false) :=
+    Relation.ReflTransGen.tail
+      (Relation.ReflTransGen.tail Relation.ReflTransGen.refl ⟨.toAuth false, pay_start_auth false⟩)
+      ⟨.toRel, pay_auth_rel false⟩
+  have hsafe := h.safety (.rel false) hreach
+  simp [holdout, paymentPolicy, payI] at hsafe
 
-theorem abstract_obligations : abstract.Obligations where
+theorem abstract_obligations : Obligations abstract where
   safety := by
-    intro _ _ _ _
+    intro _ _ 
     simp [abstract]
   goalAtTerminal := by
-    intro s₀ s hs₀ hreach hterm
-    have hs₀' : s₀ = .start := hs₀
-    subst hs₀'
+    intro s hreach hterm
     have hs := (abstract_reach s).1 hreach
     have hclosed : ¬ (s = .start ∨ s = .auth) := by
       intro hopen
       rcases hopen with rfl | rfl
-      · exact hterm .auth abs_start_auth
-      · exact hterm .rel abs_auth_rel
+      · exact hterm .auth ⟨.toAuth, abs_start_auth⟩
+      · exact hterm .rel ⟨.toRel, abs_auth_rel⟩
     rcases hs with rfl | rfl | rfl
     · exact absurd (Or.inl rfl) hclosed
     · exact absurd (Or.inr rfl) hclosed
     · simp [abstract]
 
-/-- The holdout plan has no refinement contract into the safe abstract machine,
-along any simulation. The erased clearance bit is safety-relevant. -/
+/-- The holdout task has no refinement contract into the abstract task, along any
+simulation. The erased clearance bit is part of the payment policy. -/
 theorem sanctions_no_refinement (R : Pay → AbsPay → Prop) :
     ¬ RefinementContract holdout abstract R := by
   intro h

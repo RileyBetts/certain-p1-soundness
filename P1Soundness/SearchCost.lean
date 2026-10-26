@@ -3,10 +3,13 @@ import Mathlib.Data.Fintype.Basic
 /-!
 # P3 — reuse of an abstraction need not reduce search cost
 
-Cost is the size of an exhaustive finite search tree, plus a refinement-check
-cost when a library entry is used. Coverage is the assumption that the
-abstraction applies, so the planner may search the abstract tree and pay for
-one check instead of searching the concrete tree.
+This cost is the size of an exhaustive finite search tree, plus one refinement
+check when a library abstraction is used. It is the search term only. It is not
+the four-term cost of a task, which also counts checker calls, time and GPU use.
+
+Coverage is the assumption that the abstraction applies, so the planner may
+search the abstract tree and pay for one check instead of searching the concrete
+tree.
 
 `p3_positive_bound` is the restricted inequality under that hypothesis.
 `p3_counterexample` is a concrete case where the check costs more than it saves.

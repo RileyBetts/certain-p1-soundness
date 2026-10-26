@@ -1,65 +1,168 @@
 import Mathlib.Data.Fintype.Basic
 
 /-!
-# P1 — sound composition for a finite-state planning semantics
+# P1 — sound composition for a finite-state task
 
-Research proposition P1 from the CERTAIN concept note, specialised to a
-deliberately restricted model:
+The objects follow the CERTAIN definitions.
 
-* state spaces are finite (`Fintype`);
-* a plan is the transition relation of a finite-state machine, together with
-  an initial set, a safety predicate and a goal predicate;
-* traces are finite paths; the goal obligation is required at terminal states
-  (states with no successor);
-* a refinement contract is a stutter-free forward simulation: one concrete
-  step is matched by exactly one abstract step;
-* environmental assumptions `Γ` are the contract hypotheses that have to be
-  discharged (initial correspondence, step matching, and matching of terminals);
-* the simulation used for a stack of refinements is relational composition,
-  which is transitive in the sense proved by `refinementContract_trans`.
+* A task type is one kind of regulated decision.
+* A policy is the pair `(T, I)`: legal moves and the safety invariant.
+  Every task of a task type is checked against that policy.
+* A task is one case of one task type. It fixes the starting state and the goal `G`.
+  `G` is not the task and not the policy.
+* A plan is a list of actions. A step is one action in a plan.
+* A certificate is accepted or refused by the checker. The gate is separate:
+  it decides whether a plan may be carried out, and it does not read the library.
 
-The theorem does not claim anything about infinite traces, stuttering,
-probabilistic beliefs, or the fidelity of an unmodelled environment.
+The proof is restricted, as before:
+
+* state spaces are finite (`Fintype`), so the development sits in the finite fragment;
+* traces are finite;
+* the goal of a task is required at terminal states of `T`
+  (states with no legal action);
+* a refinement contract is lockstep: one concrete action step is matched by
+  exactly one abstract action step. Stuttering is not proved;
+* `Γ` is the discharged assumptions (start correspondence, step matching, terminals).
+
+Not proved: that a checker implements the contract, infinite traces, stuttering,
+beliefs, or an unmodelled environment.
 -/
 
 universe u
 
-/-- Finite-state planning model. `step` is the set of transitions admitted by the plan. -/
-structure PlanningModel (σ : Type u) [Fintype σ] where
-  init : σ → Prop
-  step : σ → σ → Prop
-  safe : σ → Prop
-  goal : σ → Prop
+namespace Certain
 
-namespace PlanningModel
+/-- One kind of regulated decision. -/
+inductive TaskType
+  | supplierOnboarding
+  | payments
+  | dataAccess
+  deriving DecidableEq
 
-variable {σ : Type u} [Fintype σ]
+/-- The written rules of one task type: legal moves `T` and safety invariant `I`. -/
+structure Policy (X A : Type u) where
+  T : X → A → X → Prop
+  I : X → Prop
 
-/-- Reachability along admitted transitions, including the zero-step path. -/
-def Reach (M : PlanningModel σ) (s s' : σ) : Prop :=
-  Relation.ReflTransGen M.step s s'
+/-- One legal step of a policy. A step is one action. -/
+structure Step {X A : Type u} (P : Policy X A) where
+  x : X
+  a : A
+  x' : X
+  legal : P.T x a x'
 
-/-- Top-level safety and goal obligations for finite traces. -/
-structure Obligations (M : PlanningModel σ) : Prop where
-  safety : ∀ s₀ s, M.init s₀ → M.Reach s₀ s → M.safe s
+/-- A plan is the list of actions the model creates. The model may revise it
+by creating another list. -/
+abbrev Plan (A : Type u) := List A
+
+/-- The checker accepts a certificate, or refuses it.
+Acceptance does not say that the world outside the checker is correct. -/
+structure Certificate where
+  accepted : Prop
+
+def CheckerAccepts (C : Certificate) : Prop := C.accepted
+
+/-- An abstraction kept in the library only together with an accepted certificate. -/
+structure LibraryEntry where
+  certificate : Certificate
+  admittedByCertificate : CheckerAccepts certificate
+
+/-- One case of one task type, created by the generator.
+It fixes the starting state and the goal. It is checked against `policy`. -/
+structure Task (X A : Type u) [Fintype X] where
+  taskType : TaskType
+  policy : Policy X A
+  start : X
+  goal : X → Prop
+
+namespace Task
+
+variable {X A : Type u} [Fintype X]
+
+/-- A state-to-state step hides the action, for reachability. -/
+def stepRel (P : Policy X A) (x x' : X) : Prop := ∃ a, P.T x a x'
+
+/-- States reachable from `s` by legal moves of the policy. -/
+def ReachFrom (P : Policy X A) (s s' : X) : Prop :=
+  Relation.ReflTransGen (stepRel P) s s'
+
+/-- Top-level safety and goal for finite traces of a task.
+Safety is the policy invariant `I` on every reachable state, including the start.
+The goal is required only at a reachable state with no legal move. -/
+structure Obligations (task : Task X A) : Prop where
+  safety : ∀ s, ReachFrom task.policy task.start s → task.policy.I s
   goalAtTerminal :
-    ∀ s₀ s, M.init s₀ → M.Reach s₀ s → (∀ s', ¬ M.step s s') → M.goal s
+    ∀ s, ReachFrom task.policy task.start s →
+      (∀ s', ¬ stepRel task.policy s s') → task.goal s
 
-end PlanningModel
+def traceStates {P : Policy X A} (x0 : X) : List (Step P) → List X
+  | [] => [x0]
+  | s :: rest => s.x :: traceStates s.x' rest
 
-/-- Checked refinement contract for `C` against `A` along a simulation `R`.
+def chained {P : Policy X A} (x0 : X) : List (Step P) → Prop
+  | [] => True
+  | s :: rest => s.x = x0 ∧ chained s.x' rest
 
-`assumptions`, `simulation` and `terminal` are the discharged assumptions `Γ`.
-`safetyTransfer` and `goalTransfer` are the obligation maps from abstract states
-to the related concrete states. -/
+/-- The actions of a run are the plan. -/
+def realizes {P : Policy X A} (plan : Plan A) (steps : List (Step P)) : Prop :=
+  plan = steps.map Step.a
+
+def RunSafe (task : Task X A) (steps : List (Step task.policy)) : Prop :=
+  ∀ x ∈ traceStates task.start steps, task.policy.I x
+
+def RunComplete (task : Task X A) (steps : List (Step task.policy)) : Prop :=
+  ∃ x, (traceStates task.start steps).getLast? = some x ∧ task.goal x
+
+/-- A plan succeeds on a task only when every run is safe and meets the goal. -/
+def PlanSucceeds (task : Task X A) (plan : Plan A) : Prop :=
+  ∀ steps, chained task.start steps → realizes plan steps →
+    RunSafe task steps ∧ RunComplete task steps
+
+/-- A scored plan lies in the finite fragment: states are finite by `Fintype`,
+and the plan is no longer than the bound. -/
+def inFiniteFragment {B : Type u} (maxLen : Nat) (plan : Plan B) : Prop :=
+  plan.length ≤ maxLen
+
+omit [Fintype X] in
+lemma mem_trace_reachable {P : Policy X A} {x0 x : X} (steps : List (Step P))
+    (hchain : chained x0 steps) (hx : x ∈ traceStates x0 steps) :
+    ReachFrom P x0 x := by
+  induction steps generalizing x0 x with
+  | nil =>
+      simp [traceStates] at hx
+      subst hx
+      exact Relation.ReflTransGen.refl
+  | cons s rest ih =>
+      obtain ⟨rfl, hrest⟩ := hchain
+      simp [traceStates] at hx
+      rcases hx with rfl | hx
+      · exact Relation.ReflTransGen.refl
+      · exact Relation.ReflTransGen.head ⟨s.a, s.legal⟩ (ih hrest hx)
+
+/-- Every run of a task that meets its obligations stays inside the policy invariant. -/
+theorem run_safe_of_obligations (task : Task X A) (h : Obligations task)
+    (steps : List (Step task.policy)) (hchain : chained task.start steps) :
+    RunSafe task steps := by
+  intro x hx
+  exact h.safety x (mem_trace_reachable steps hchain hx)
+
+end Task
+
+open Task
+
+/-- Checked refinement contract for concrete task `C` against abstract task `A`.
+One concrete action is matched by exactly one abstract action.
+`assumptions`, `simulation` and `terminal` are the discharged assumptions `Γ`. -/
 structure RefinementContract
-    {σc σa : Type u} [Fintype σc] [Fintype σa]
-    (C : PlanningModel σc) (A : PlanningModel σa)
-    (R : σc → σa → Prop) : Prop where
-  assumptions : ∀ s, C.init s → ∃ t, A.init t ∧ R s t
-  simulation : ∀ s s' t, R s t → C.step s s' → ∃ t', A.step t t' ∧ R s' t'
-  terminal : ∀ s t, R s t → (∀ s', ¬ C.step s s') → ∀ t', ¬ A.step t t'
-  safetyTransfer : ∀ s t, R s t → A.safe t → C.safe s
+    {Xc Ac Xa Aa : Type u} [Fintype Xc] [Fintype Xa]
+    (C : Task Xc Ac) (A : Task Xa Aa)
+    (R : Xc → Xa → Prop) : Prop where
+  assumptions : R C.start A.start
+  simulation : ∀ s s' t a, R s t → C.policy.T s a s' →
+    ∃ t' b, A.policy.T t b t' ∧ R s' t'
+  terminal : ∀ s t, R s t → (∀ s', ¬ stepRel C.policy s s') →
+    ∀ t', ¬ stepRel A.policy t t'
+  safetyTransfer : ∀ s t, R s t → A.policy.I t → C.policy.I s
   goalTransfer : ∀ s t, R s t → A.goal t → C.goal s
 
 /-- Relational composition of simulation relations. -/
@@ -68,53 +171,49 @@ def SimRel.comp {α β γ : Type u} (R : α → β → Prop) (S : β → γ → 
   fun a c => ∃ b, R a b ∧ S b c
 
 lemma reach_simulated
-    {σc σa : Type u} [Fintype σc] [Fintype σa]
-    {C : PlanningModel σc} {A : PlanningModel σa} {R : σc → σa → Prop}
-    (h : RefinementContract C A R) {s s' : σc} {t : σa}
-    (hR : R s t) (hreach : C.Reach s s') :
-    ∃ t', A.Reach t t' ∧ R s' t' := by
+    {Xc Ac Xa Aa : Type u} [Fintype Xc] [Fintype Xa]
+    {C : Task Xc Ac} {A : Task Xa Aa} {R : Xc → Xa → Prop}
+    (h : RefinementContract C A R) {s s' : Xc} {t : Xa}
+    (hR : R s t) (hreach : ReachFrom C.policy s s') :
+    ∃ t', ReachFrom A.policy t t' ∧ R s' t' := by
   induction hreach with
   | refl =>
       exact ⟨t, Relation.ReflTransGen.refl, hR⟩
   | tail _ hstep ih =>
       obtain ⟨t₁, ht₁, hR₁⟩ := ih
-      obtain ⟨t', hst, hR'⟩ := h.simulation _ _ _ hR₁ hstep
-      exact ⟨t', Relation.ReflTransGen.tail ht₁ hst, hR'⟩
+      obtain ⟨a, hT⟩ := hstep
+      obtain ⟨t', _, hst, hR'⟩ := h.simulation _ _ _ a hR₁ hT
+      exact ⟨t', Relation.ReflTransGen.tail ht₁ ⟨_, hst⟩, hR'⟩
 
-/-- One checked refinement preserves the abstract obligations. -/
+/-- One checked refinement preserves the abstract obligations on the concrete task. -/
 theorem obligations_transfer
-    {σc σa : Type u} [Fintype σc] [Fintype σa]
-    {C : PlanningModel σc} {A : PlanningModel σa} {R : σc → σa → Prop}
-    (h : RefinementContract C A R) (top : A.Obligations) : C.Obligations := by
+    {Xc Ac Xa Aa : Type u} [Fintype Xc] [Fintype Xa]
+    {C : Task Xc Ac} {A : Task Xa Aa} {R : Xc → Xa → Prop}
+    (h : RefinementContract C A R) (top : Obligations A) : Obligations C := by
   refine ⟨?safety, ?goal⟩
-  · intro s₀ s hs₀ hreach
-    obtain ⟨t₀, ht₀, hR₀⟩ := h.assumptions s₀ hs₀
-    obtain ⟨t, ht, hR⟩ := reach_simulated h hR₀ hreach
-    exact h.safetyTransfer s t hR (top.safety t₀ t ht₀ ht)
-  · intro s₀ s hs₀ hreach hterm
-    obtain ⟨t₀, ht₀, hR₀⟩ := h.assumptions s₀ hs₀
-    obtain ⟨t, ht, hR⟩ := reach_simulated h hR₀ hreach
-    have hAterm : ∀ t', ¬ A.step t t' := h.terminal s t hR hterm
-    exact h.goalTransfer s t hR (top.goalAtTerminal t₀ t ht₀ ht hAterm)
+  · intro s hreach
+    obtain ⟨t, ht, hR⟩ := reach_simulated h h.assumptions hreach
+    exact h.safetyTransfer s t hR (top.safety t ht)
+  · intro s hreach hterm
+    obtain ⟨t, ht, hR⟩ := reach_simulated h h.assumptions hreach
+    have hAterm : ∀ t', ¬ stepRel A.policy t t' := h.terminal s t hR hterm
+    exact h.goalTransfer s t hR (top.goalAtTerminal t ht hAterm)
 
-/-- Simulation contracts compose. This is transitivity of the chosen simulation. -/
+/-- Simulation contracts compose. -/
 theorem refinementContract_trans
-    {σ₁ σ₂ σ₃ : Type u} [Fintype σ₁] [Fintype σ₂] [Fintype σ₃]
-    {M₁ : PlanningModel σ₁} {M₂ : PlanningModel σ₂} {M₃ : PlanningModel σ₃}
-    {R₁₂ : σ₁ → σ₂ → Prop} {R₂₃ : σ₂ → σ₃ → Prop}
+    {X₁ A₁ X₂ A₂ X₃ A₃ : Type u}
+    [Fintype X₁] [Fintype X₂] [Fintype X₃]
+    {M₁ : Task X₁ A₁} {M₂ : Task X₂ A₂} {M₃ : Task X₃ A₃}
+    {R₁₂ : X₁ → X₂ → Prop} {R₂₃ : X₂ → X₃ → Prop}
     (h₁₂ : RefinementContract M₁ M₂ R₁₂) (h₂₃ : RefinementContract M₂ M₃ R₂₃) :
     RefinementContract M₁ M₃ (SimRel.comp R₁₂ R₂₃) where
-  assumptions := by
-    intro s hs
-    obtain ⟨t, ht, hR⟩ := h₁₂.assumptions s hs
-    obtain ⟨u, hu, hS⟩ := h₂₃.assumptions t ht
-    exact ⟨u, hu, t, hR, hS⟩
+  assumptions := ⟨M₂.start, h₁₂.assumptions, h₂₃.assumptions⟩
   simulation := by
-    intro s s' u hsu hstep
+    intro s s' u a hsu hstep
     obtain ⟨t, hR, hS⟩ := hsu
-    obtain ⟨t', ht, hR'⟩ := h₁₂.simulation s s' t hR hstep
-    obtain ⟨u', hu, hS'⟩ := h₂₃.simulation t t' u hS ht
-    exact ⟨u', hu, t', hR', hS'⟩
+    obtain ⟨t', b, ht, hR'⟩ := h₁₂.simulation s s' t a hR hstep
+    obtain ⟨u', c, hu, hS'⟩ := h₂₃.simulation t t' u b hS ht
+    exact ⟨u', c, hu, t', hR', hS'⟩
   terminal := by
     intro s u hsu hterm t'
     obtain ⟨t, hR, hS⟩ := hsu
@@ -129,12 +228,17 @@ theorem refinementContract_trans
     exact h₁₂.goalTransfer s t hR (h₂₃.goalTransfer t u hS hgoal)
 
 /-- **P1.** If each refinement contract is checked, its assumptions are discharged,
-and the simulation is the transitive (composed) relation, then the concrete plan
-preserves the top-level safety and goal obligations. -/
+and the simulation is the transitive (composed) relation, then the concrete task
+preserves the top-level safety invariant and the goal. -/
 theorem p1_sound_composition
-    {σ₁ σ₂ σ₃ : Type u} [Fintype σ₁] [Fintype σ₂] [Fintype σ₃]
-    {M₁ : PlanningModel σ₁} {M₂ : PlanningModel σ₂} {M₃ : PlanningModel σ₃}
-    {R₁₂ : σ₁ → σ₂ → Prop} {R₂₃ : σ₂ → σ₃ → Prop}
+    {X₁ A₁ X₂ A₂ X₃ A₃ : Type u}
+    [Fintype X₁] [Fintype X₂] [Fintype X₃]
+    {M₁ : Task X₁ A₁} {M₂ : Task X₂ A₂} {M₃ : Task X₃ A₃}
+    {R₁₂ : X₁ → X₂ → Prop} {R₂₃ : X₂ → X₃ → Prop}
     (h₁₂ : RefinementContract M₁ M₂ R₁₂) (h₂₃ : RefinementContract M₂ M₃ R₂₃)
-    (top : M₃.Obligations) : M₁.Obligations :=
+    (top : Obligations M₃) : Obligations M₁ :=
   obligations_transfer (refinementContract_trans h₁₂ h₂₃) top
+
+end Certain
+
+export Certain (p1_sound_composition obligations_transfer refinementContract_trans)

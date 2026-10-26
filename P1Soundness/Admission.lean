@@ -1,34 +1,44 @@
 import P1Soundness.SoundComposition
 
+open Certain
+
 /-!
 # P2 — library extension does not enlarge executable authority
 
-The gate is a predicate of the concrete plan alone. A library is data the
-proposer may consult, but it is not an input to the gate. Therefore replacing
-or extending the library leaves the admitted set unchanged.
+The gate decides whether a plan may be carried out with a certificate.
+A library is the set of abstractions a certificate has admitted. It is data
+the proposer may consult. It is not an argument of the gate. Replacing or
+extending the library leaves the admitted set unchanged.
 
-The contrasting statement `ungated_library_enlarges` shows that a check which
-treats library membership itself as permission does enlarge authority.
+`ungated_library_enlarges` is the contrast: if library membership itself is
+permission, adding an entry admits a plan the empty library refused.
 -/
 
-/-- A completely mediating gate. Instantiated at `PlanningModel.Obligations`. -/
-def Admitted {σ α : Type u} [Fintype σ]
-    (gate : PlanningModel σ → Prop) (_library : List α) (M : PlanningModel σ) : Prop :=
-  gate M
+/-- The gate decides whether this plan may be carried out with this certificate.
+The library is not an argument, and neither is a belief. -/
+def Gate {A : Type} (planOk : Plan A → Prop) (plan : Plan A) (C : Certificate) : Prop :=
+  CheckerAccepts C ∧ planOk plan
+
+/-- A completely mediating gate. The library argument is ignored. -/
+def Admitted {A : Type} (gate : Plan A → Certificate → Prop)
+    (_library : List LibraryEntry) (plan : Plan A) (C : Certificate) : Prop :=
+  gate plan C
 
 /-- **P2.** Extending or replacing the library does not change admission. -/
 theorem p2_library_extension_safety
-    {σ α : Type u} [Fintype σ]
-    (gate : PlanningModel σ → Prop) (library extra : List α) (M : PlanningModel σ) :
-    Admitted gate (library ++ extra) M ↔ Admitted gate library M :=
+    {A : Type}
+    (gate : Plan A → Certificate → Prop)
+    (library extra : List LibraryEntry) (plan : Plan A) (C : Certificate) :
+    Admitted gate (library ++ extra) plan C ↔ Admitted gate library plan C :=
   Iff.rfl
 
 /-- A plan the gate rejects stays rejected after the library grows. -/
 theorem p2_rejected_stays_rejected
-    {σ α : Type u} [Fintype σ]
-    (gate : PlanningModel σ → Prop) (library extra : List α) (M : PlanningModel σ)
-    (hrej : ¬ gate M) :
-    ¬ Admitted gate (library ++ extra) M :=
+    {A : Type}
+    (gate : Plan A → Certificate → Prop)
+    (library extra : List LibraryEntry) (plan : Plan A) (C : Certificate)
+    (hrej : ¬ gate plan C) :
+    ¬ Admitted gate (library ++ extra) plan C :=
   hrej
 
 /-- Names of plans, used only for the ungated contrast. -/
