@@ -10,6 +10,13 @@ A library is the set of abstractions a certificate has admitted. It is data
 the proposer may consult. It is not an argument of the gate. Replacing or
 extending the library leaves the admitted set unchanged.
 
+P2 holds by definition: complete mediation means the library is not an input of
+the gate, so the proof is `Iff.rfl`. It does not use the certificates in
+`LibraryEntry`.
+
+`admitted_plan_succeeds` instantiates the gate with `PlanSucceeds`, the
+condition the CERTAIN gate requires: an admitted plan then succeeds on its task.
+
 `ungated_library_enlarges` is the contrast: if library membership itself is
 permission, adding an entry admits a plan the empty library refused.
 -/
@@ -40,6 +47,15 @@ theorem p2_rejected_stays_rejected
     (hrej : ¬ gate plan C) :
     ¬ Admitted gate (library ++ extra) plan C :=
   hrej
+
+/-- With the gate's plan condition set to `PlanSucceeds task`, any plan the gate
+admits, with any library, succeeds on that task and has an accepted certificate. -/
+theorem admitted_plan_succeeds
+    {X A : Type} (task : Task.{0} X A)
+    (library : List LibraryEntry) (plan : Plan A) (C : Certificate)
+    (h : Admitted (Gate (Task.PlanSucceeds task)) library plan C) :
+    CheckerAccepts C ∧ Task.PlanSucceeds task plan :=
+  h
 
 /-- Names of plans, used only for the ungated contrast. -/
 inductive PlanId

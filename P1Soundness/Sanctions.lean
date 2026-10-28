@@ -16,6 +16,12 @@ so an uncleared release is reachable and `I` fails.
 The abstract task erases the clearance bit. Its own invariant holds, and no
 refinement contract from the holdout task to that abstract task exists:
 `obligations_transfer` would make the holdout task safe.
+
+Here the restriction is in `I`, not in `T`: `T` allows the uncleared release.
+`sanctions_no_refinement` holds for every relation because the holdout task is
+unsafe and the abstract task is safe; the erased bit is how this abstraction
+loses the fact that makes the difference. The development does not show that
+moving clearance into an assumption restores a contract.
 -/
 
 inductive Pay
@@ -40,19 +46,6 @@ inductive AbsAct
   | toRel
   deriving DecidableEq
 
-instance : Fintype Pay where
-  elems := {Pay.start, Pay.auth false, Pay.auth true, Pay.rel false, Pay.rel true}
-  complete x := by
-    cases x with
-    | start => decide
-    | auth cleared => cases cleared <;> decide
-    | rel cleared => cases cleared <;> decide
-
-instance : Fintype AbsPay where
-  elems := {AbsPay.start, AbsPay.auth, AbsPay.rel}
-  complete x := by
-    cases x <;> decide
-
 namespace Sanctions
 
 def payTB : Pay → PayAct → Pay → Bool
@@ -63,10 +56,10 @@ def payTB : Pay → PayAct → Pay → Bool
 def payT (s : Pay) (a : PayAct) (s' : Pay) : Prop :=
   payTB s a s' = true
 
-lemma pay_start_auth (c : Bool) : payT .start (.toAuth c) (.auth c) := by
+theorem pay_start_auth (c : Bool) : payT .start (.toAuth c) (.auth c) := by
   cases c <;> rfl
 
-lemma pay_auth_rel (c : Bool) : payT (.auth c) .toRel (.rel c) := by
+theorem pay_auth_rel (c : Bool) : payT (.auth c) .toRel (.rel c) := by
   cases c <;> rfl
 
 /-- Release is safe only when sanctions are clear. -/
@@ -115,9 +108,9 @@ def absTB : AbsPay → AbsAct → AbsPay → Bool
 def absT (s : AbsPay) (a : AbsAct) (s' : AbsPay) : Prop :=
   absTB s a s' = true
 
-lemma abs_start_auth : absT .start .toAuth .auth := rfl
+theorem abs_start_auth : absT .start .toAuth .auth := rfl
 
-lemma abs_auth_rel : absT .auth .toRel .rel := rfl
+theorem abs_auth_rel : absT .auth .toRel .rel := rfl
 
 /-- The coarse task drops the clearance bit and treats every state as safe. -/
 def abstract : Task AbsPay AbsAct where
@@ -130,16 +123,16 @@ theorem erase_forgets_clearance :
     erase (.rel false) = erase (.rel true) :=
   rfl
 
-lemma payT_auth {c : Bool} {a : PayAct} {s : Pay} (h : payT (.auth c) a s) :
+theorem payT_auth {c : Bool} {a : PayAct} {s : Pay} (h : payT (.auth c) a s) :
     a = .toRel ∧ s = .rel c := by
   cases a <;> cases s <;> simp [payT, payTB] at h
   subst h
   exact ⟨rfl, rfl⟩
 
-lemma payT_rel {c : Bool} {a : PayAct} {s : Pay} (h : payT (.rel c) a s) : False := by
+theorem payT_rel {c : Bool} {a : PayAct} {s : Pay} (h : payT (.rel c) a s) : False := by
   cases c <;> cases a <;> cases s <;> unfold payT payTB at h <;> simp at h
 
-lemma training_reach (s : Pay) :
+theorem training_reach (s : Pay) :
     ReachFrom training.policy training.start s ↔
       s = .auth true ∨ s = .rel true := by
   constructor
@@ -159,20 +152,20 @@ lemma training_reach (s : Pay) :
     · exact Relation.ReflTransGen.tail Relation.ReflTransGen.refl
         ⟨.toRel, pay_auth_rel true⟩
 
-lemma absT_start {a : AbsAct} {s : AbsPay} (h : absT .start a s) :
+theorem absT_start {a : AbsAct} {s : AbsPay} (h : absT .start a s) :
     a = .toAuth ∧ s = .auth := by
   cases a <;> cases s <;> simp [absT, absTB] at h
   exact ⟨rfl, rfl⟩
 
-lemma absT_auth {a : AbsAct} {s : AbsPay} (h : absT .auth a s) :
+theorem absT_auth {a : AbsAct} {s : AbsPay} (h : absT .auth a s) :
     a = .toRel ∧ s = .rel := by
   cases a <;> cases s <;> simp [absT, absTB] at h
   exact ⟨rfl, rfl⟩
 
-lemma absT_rel {a : AbsAct} {s : AbsPay} (h : absT .rel a s) : False := by
+theorem absT_rel {a : AbsAct} {s : AbsPay} (h : absT .rel a s) : False := by
   cases a <;> cases s <;> simp [absT, absTB] at h
 
-lemma abstract_reach (s : AbsPay) :
+theorem abstract_reach (s : AbsPay) :
     ReachFrom abstract.policy abstract.start s ↔
       s = .start ∨ s = .auth ∨ s = .rel := by
   constructor
@@ -236,7 +229,7 @@ theorem abstract_obligations : Obligations abstract where
     · simp [abstract]
 
 /-- The holdout task has no refinement contract into the abstract task, along any
-simulation. The erased clearance bit is part of the payment policy. -/
+relation: the holdout task is unsafe and the abstract task meets its obligations. -/
 theorem sanctions_no_refinement (R : Pay → AbsPay → Prop) :
     ¬ RefinementContract holdout abstract R := by
   intro h
