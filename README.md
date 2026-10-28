@@ -15,6 +15,8 @@ lake build
 
 `lake build` must finish with no errors. There are no `axiom` declarations and no `sorry`. A successful build means the kernel accepted every theorem below.
 
+On the tagged revision, `#print axioms` reports that `p1_sound_composition` and `refines_chain_obligations` depend on no axioms, and that `p1_plan_succeeds` and `sanctions_no_refinement` depend only on `propext`, which is propositional extensionality from Lean's logic.
+
 To inspect one result:
 
 ```sh
@@ -74,7 +76,7 @@ If two contracts `M₁ → M₂` and `M₂ → M₃` are given, and `M₃` meets
 
 The guarantee is task-level obligation transfer. It is not plan-level trace inclusion. Stuttering, infinite traces, and beliefs are out of scope.
 
-The CERTAIN text names `p1_sound_composition` and `refinementContract_trans`.
+The CERTAIN text names `p1_sound_composition`, `refinementContract_trans`, `obligations_transfer`, `refines_chain_obligations` and `p1_plan_succeeds`.
 
 ### P2 — `p2_library_extension_safety`
 
@@ -88,7 +90,7 @@ The CERTAIN text names `p1_sound_composition` and `refinementContract_trans`.
 
 `ungated_library_enlarges` is the contrast. If permission is membership of the library, then `release` is refused by the empty library and admitted once it is added.
 
-The CERTAIN text names `p2_library_extension_safety` and `ungated_library_enlarges`.
+The CERTAIN text names `p2_library_extension_safety`, `ungated_library_enlarges` and `admitted_plan_succeeds`.
 
 ### P3 — search cost
 
